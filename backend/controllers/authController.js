@@ -6,6 +6,7 @@ const {
     compareContext,
     updateKnownContext,
 } = require("../services/contextService");
+const { evaluateLoginRisk } = require("../services/riskService");
 
 
 // ─────────────────────────────────────────
@@ -203,6 +204,27 @@ const login = async (req, res) => {
         // Add new IP / device / country to known lists
         await updateKnownContext(user._id, context);
 
+        // ─────────────────────────────────────────
+        // EVALUATE RISK SCORE
+        // ─────────────────────────────────────────
+        const riskResult = evaluateLoginRisk({
+            user,
+            contextFlags: flags,
+            currentBiometrics: null, // Biometrics submitted separately after login
+        });
+
+        // Save risk data into the LoginAttempt record
+        await LoginAttempt.findByIdAndUpdate(loginAttempt._id, {
+            riskScore:   riskResult.score,
+            riskLevel:   riskResult.level,
+            riskFactors: riskResult.factors,
+        });
+
+        // Update user's current risk score
+        await User.findByIdAndUpdate(user._id, {
+            riskScore: riskResult.score,
+        });
+
         // Generate JWT
         const token = generateToken(user._id, user.role);
 
@@ -211,6 +233,13 @@ const login = async (req, res) => {
             message: "Login successful.",
             token,
             loginAttemptId: loginAttempt._id,
+            risk: {
+                score:       riskResult.score,
+                level:       riskResult.level,
+                action:      riskResult.action,
+                description: riskResult.description,
+                factors:     riskResult.factors,
+            },
             context: {
                 ip:             context.ipAddress,
                 country:        context.country,
@@ -229,7 +258,7 @@ const login = async (req, res) => {
                 email:       user.email,
                 role:        user.role,
                 trustScore:  user.trustScore,
-                riskScore:   user.riskScore,
+                riskScore:   riskResult.score,
                 lastLoginAt: user.lastLoginAt,
                 lastLoginIP: user.lastLoginIP,
             },
