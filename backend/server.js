@@ -71,8 +71,9 @@ app.get("/api/health", (req, res) => {
 // ─────────────────────────────────────────
 // API ROUTES (will be added per phase)
 // ─────────────────────────────────────────
-app.use("/api/auth", require("./routes/authRoutes"));
+app.use("/api/auth",       require("./routes/authRoutes"));
 app.use("/api/biometrics", require("./routes/biometricRoutes"));
+app.use("/api/context",    require("./routes/contextRoutes"));
 // app.use("/api/risk",       require("./routes/riskRoutes"));
 // app.use("/api/mfa",        require("./routes/mfaRoutes"));
 // app.use("/api/alerts",     require("./routes/alertRoutes"));

@@ -1,5 +1,12 @@
-const User = require("../models/User");
+const User          = require("../models/User");
 const generateToken = require("../utils/generateToken");
+const LoginAttempt  = require("../models/LoginAttempt");
+const {
+    collectContext,
+    compareContext,
+    updateKnownContext,
+} = require("../services/contextService");
+
 
 // ─────────────────────────────────────────
 // REGISTER
@@ -94,6 +101,9 @@ const login = async (req, res) => {
             });
         }
 
+        // Collect context early — needed for both failure and success paths
+        const context = collectContext(req);
+
         // Find user — explicitly include password for comparison
         const user = await User.findOne({ email }).select("+password +otp +otpExpiresAt");
 
@@ -123,7 +133,23 @@ const login = async (req, res) => {
         const isMatch = await user.comparePassword(password);
 
         if (!isMatch) {
-            // Increment failed attempts
+            // Record failed attempt with context
+            await LoginAttempt.create({
+                userId:        user._id,
+                email:         user.email,
+                success:       false,
+                failureReason: "wrong_password",
+                context: {
+                    ipAddress: context.ipAddress,
+                    country:   context.country,
+                    city:      context.city,
+                    browser:   context.browser,
+                    os:        context.os,
+                    device:    context.device,
+                    userAgent: context.userAgent,
+                },
+            });
+
             await user.incrementFailedAttempts();
 
             const attemptsLeft =
@@ -142,10 +168,40 @@ const login = async (req, res) => {
         // ✅ Password matched — reset failed attempts
         await user.resetFailedAttempts();
 
-        // Update last login info
+        // ─────────────────────────────────────────
+        // COMPARE CONTEXT AGAINST KNOWN USER DATA
+        // ─────────────────────────────────────────
+        const flags = compareContext(context, user);
+
+        // Save LoginAttempt record with full context
+        const loginAttempt = await LoginAttempt.create({
+            userId:  user._id,
+            email:   user.email,
+            success: true,
+            context: {
+                ipAddress:         context.ipAddress,
+                country:           context.country,
+                city:              context.city,
+                region:            context.region,
+                isp:               context.isp,
+                device:            context.device,
+                browser:           context.browser,
+                os:                context.os,
+                userAgent:         context.userAgent,
+                deviceFingerprint: context.deviceFingerprint,
+                isKnownIP:         flags.isKnownIP,
+                isKnownDevice:     flags.isKnownDevice,
+                isKnownCountry:    flags.isKnownCountry,
+            },
+        });
+
+        // Update user last login info
         user.lastLoginAt = new Date();
-        user.lastLoginIP = req.ip || req.headers["x-forwarded-for"] || "unknown";
+        user.lastLoginIP = context.ipAddress;
         await user.save();
+
+        // Add new IP / device / country to known lists
+        await updateKnownContext(user._id, context);
 
         // Generate JWT
         const token = generateToken(user._id, user.role);
@@ -154,13 +210,26 @@ const login = async (req, res) => {
             success: true,
             message: "Login successful.",
             token,
+            loginAttemptId: loginAttempt._id,
+            context: {
+                ip:             context.ipAddress,
+                country:        context.country,
+                city:           context.city,
+                browser:        context.browser,
+                os:             context.os,
+                device:         context.device,
+                isKnownIP:      flags.isKnownIP,
+                isKnownDevice:  flags.isKnownDevice,
+                isKnownCountry: flags.isKnownCountry,
+                newFlags:       flags.riskFactors,
+            },
             user: {
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                trustScore: user.trustScore,
-                riskScore: user.riskScore,
+                id:          user._id,
+                name:        user.name,
+                email:       user.email,
+                role:        user.role,
+                trustScore:  user.trustScore,
+                riskScore:   user.riskScore,
                 lastLoginAt: user.lastLoginAt,
                 lastLoginIP: user.lastLoginIP,
             },
