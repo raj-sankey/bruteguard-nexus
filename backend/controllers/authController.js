@@ -7,6 +7,12 @@ const {
     updateKnownContext,
 } = require("../services/contextService");
 const { evaluateLoginRisk } = require("../services/riskService");
+const { handleFailedAttempt } = require("../services/bruteForceService");
+const {
+    createHighRiskLoginAlert,
+    createNewDeviceAlert,
+    createNewCountryAlert,
+} = require("../utils/alertHelper");
 
 
 // ─────────────────────────────────────────
@@ -135,7 +141,7 @@ const login = async (req, res) => {
 
         if (!isMatch) {
             // Record failed attempt with context
-            await LoginAttempt.create({
+            const failedAttempt = await LoginAttempt.create({
                 userId:        user._id,
                 email:         user.email,
                 success:       false,
@@ -151,18 +157,31 @@ const login = async (req, res) => {
                 },
             });
 
-            await user.incrementFailedAttempts();
+            // Handle brute force detection
+            const bruteForceResult = await handleFailedAttempt({
+                userId:         user._id,
+                email:          user.email,
+                ipAddress:      context.ipAddress,
+                country:        context.country,
+                device:         context.device,
+                browser:        context.browser,
+                loginAttemptId: failedAttempt._id,
+            });
 
-            const attemptsLeft =
-                (parseInt(process.env.MAX_FAILED_LOGINS) || 5) -
-                user.failedLoginAttempts;
+            if (bruteForceResult?.locked) {
+                return res.status(403).json({
+                    success:      false,
+                    message:      `Too many failed attempts. Account locked for ${process.env.ACCOUNT_LOCK_MINUTES || 30} minutes.`,
+                    locked:       true,
+                    lockUntil:    bruteForceResult.lockUntil,
+                    attemptCount: bruteForceResult.attemptCount,
+                });
+            }
 
             return res.status(401).json({
-                success: false,
-                message:
-                    attemptsLeft > 0
-                        ? `Invalid email or password. ${attemptsLeft} attempt(s) remaining before lockout.`
-                        : "Account has been locked due to too many failed attempts.",
+                success:      false,
+                message:      `Invalid email or password. ${bruteForceResult?.attemptsLeft || 0} attempt(s) remaining before lockout.`,
+                attemptsLeft: bruteForceResult?.attemptsLeft || 0,
             });
         }
 
@@ -224,6 +243,48 @@ const login = async (req, res) => {
         await User.findByIdAndUpdate(user._id, {
             riskScore: riskResult.score,
         });
+
+        // ─────────────────────────────────────────
+        // TRIGGER CONTEXTUAL ALERTS
+        // ─────────────────────────────────────────
+
+        // High risk login alert
+        if (riskResult.score >= parseInt(process.env.RISK_HIGH_THRESHOLD || 70)) {
+            await createHighRiskLoginAlert({
+                userId:         user._id,
+                email:          user.email,
+                riskScore:      riskResult.score,
+                riskFactors:    riskResult.factors,
+                ipAddress:      context.ipAddress,
+                country:        context.country,
+                device:         context.device,
+                browser:        context.browser,
+                loginAttemptId: loginAttempt._id,
+            });
+        }
+
+        // New device alert
+        if (flags.isNewDevice) {
+            await createNewDeviceAlert({
+                userId:    user._id,
+                email:     user.email,
+                device:    context.device,
+                browser:   context.browser,
+                os:        context.os,
+                ipAddress: context.ipAddress,
+                country:   context.country,
+            });
+        }
+
+        // New country alert
+        if (flags.isNewCountry && !context.isLocal) {
+            await createNewCountryAlert({
+                userId:    user._id,
+                email:     user.email,
+                country:   context.country,
+                ipAddress: context.ipAddress,
+            });
+        }
 
         // Generate JWT
         const token = generateToken(user._id, user.role);
