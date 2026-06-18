@@ -13,6 +13,10 @@ const {
     createNewDeviceAlert,
     createNewCountryAlert,
 } = require("../utils/alertHelper");
+const {
+    isIPBlocked,
+    detectCredentialStuffing,
+} = require("../services/credentialStuffingService");
 
 
 // ─────────────────────────────────────────
@@ -111,6 +115,20 @@ const login = async (req, res) => {
         // Collect context early — needed for both failure and success paths
         const context = collectContext(req);
 
+        // ─────────────────────────────────────────
+        // STEP 2 — CHECK IF IP IS BLOCKED
+        // ─────────────────────────────────────────
+        const ipBlockStatus = await isIPBlocked(context.ipAddress);
+        if (ipBlockStatus.blocked) {
+            return res.status(403).json({
+                success:     false,
+                message:     ipBlockStatus.message,
+                blocked:     true,
+                blockUntil:  ipBlockStatus.blockUntil  || null,
+                isPermanent: ipBlockStatus.isPermanent || false,
+            });
+        }
+
         // Find user — explicitly include password for comparison
         const user = await User.findOne({ email }).select("+password +otp +otpExpiresAt");
 
@@ -168,6 +186,20 @@ const login = async (req, res) => {
                 loginAttemptId: failedAttempt._id,
             });
 
+            // ─────────────────────────────────────────
+            // CREDENTIAL STUFFING DETECTION
+            // ─────────────────────────────────────────
+            await detectCredentialStuffing({
+                ipAddress:      context.ipAddress,
+                email:          user.email,
+                country:        context.country,
+                region:         context.region,
+                city:           context.city,
+                isp:            context.isp,
+                loginAttemptId: failedAttempt._id,
+                userId:         user._id,
+            });
+
             if (bruteForceResult?.locked) {
                 return res.status(403).json({
                     success:      false,
@@ -213,6 +245,19 @@ const login = async (req, res) => {
                 isKnownDevice:     flags.isKnownDevice,
                 isKnownCountry:    flags.isKnownCountry,
             },
+        });
+
+        // Run CS detection even on success
+        // (successful logins from stuffing IPs are still suspicious)
+        await detectCredentialStuffing({
+            ipAddress:      context.ipAddress,
+            email:          user.email,
+            country:        context.country,
+            region:         context.region,
+            city:           context.city,
+            isp:            context.isp,
+            loginAttemptId: loginAttempt._id,
+            userId:         user._id,
         });
 
         // Update user last login info

@@ -79,16 +79,31 @@ const extractIP = (req) => {
     if (forwarded) {
         // x-forwarded-for can be a comma-separated list
         // First IP is the original client
-        return forwarded.split(",")[0].trim();
+        const ip = forwarded.split(",")[0].trim();
+        return normalizeIP(ip);
     }
 
-    return (
+    const raw =
         req.headers["x-real-ip"] ||
         req.connection?.remoteAddress ||
         req.socket?.remoteAddress ||
         req.ip ||
-        "unknown"
-    );
+        "unknown";
+
+    return normalizeIP(raw);
+};
+
+/**
+ * Normalize IPv4-mapped IPv6 addresses to plain IPv4
+ * e.g. "::ffff:172.16.1.63" → "172.16.1.63"
+ * @param {string} ip
+ * @returns {string}
+ */
+const normalizeIP = (ip) => {
+    if (ip && ip.startsWith("::ffff:")) {
+        return ip.slice(7); // strip "::ffff:" prefix
+    }
+    return ip;
 };
 
 module.exports = { getIPInfo, extractIP };
