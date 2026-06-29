@@ -77,10 +77,11 @@ app.use("/api/context",    require("./routes/contextRoutes"));
 app.use("/api/risk",       require("./routes/riskRoutes"));
 app.use("/api/bruteforce",   require("./routes/bruteForceRoutes"));
 app.use("/api/credstuffing", require("./routes/credentialStuffingRoutes"));
-// app.use("/api/mfa",        require("./routes/mfaRoutes"));
-// app.use("/api/alerts",     require("./routes/alertRoutes"));
-// app.use("/api/admin",      require("./routes/adminRoutes"));
-// app.use("/api/analytics",  require("./routes/analyticsRoutes"));
+app.use("/api/mfa",          require("./routes/mfaRoutes"));
+app.use("/api/trust",        require("./routes/trustScoreRoutes")); // Phase 9
+app.use("/api/alerts",       require("./routes/alertRoutes"));      // Phase 10
+app.use("/api/admin",        require("./routes/adminRoutes"));      // Phase 11
+app.use("/api/analytics",    require("./routes/analyticsRoutes"));  // Phase 12
 
 // ─────────────────────────────────────────
 // 404 HANDLER — Unknown Routes
